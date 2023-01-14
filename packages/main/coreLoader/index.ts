@@ -14,10 +14,12 @@ const storage = new Storage()
 /** Some types for core */
 const BoolType = ref.types.bool
 const IntType = ref.types.int
+const AsstAsyncCallIdType = ref.types.int
+const AsstBoolType = ref.types.uint8
 // const IntArrayType = ArrayType(IntType)
 // const DoubleType = ref.types.double
 const ULLType = ref.types.ulonglong
-const voidType = ref.types.void
+const VoidType = ref.types.void
 const StringType = ref.types.CString
 // const StringPtrType = ref.refType(StringType)
 // const StringPtrArrayType = ArrayType(StringType)
@@ -25,6 +27,7 @@ const AsstType = ref.types.void
 const AsstPtrType = ref.refType(AsstType)
 // const TaskPtrType = ref.refType(AsstType)
 const CustomArgsType = ref.refType(ref.types.void)
+const IntPointerType = ref.refType(IntType)
 /**
 const CallBackType = ffi.Function(ref.types.void, [
   IntType,
@@ -45,13 +48,10 @@ function createVoidPointer (): ref.Value<void> {
 class CoreLoader {
   private readonly dependences: Record<string, string[]> = {
     win32: [
-      'libiomp5md',
-      'mklml',
-      'mkldnn',
       'opencv_world453',
-      'paddle_inference',
-      'ppocr'
-      // 'penguin-stats-recognize'
+      'onnxruntime',
+      'paddle2onnx',
+      'fastdeploy'
     ],
     linux: [
       'libiomp5.so',
@@ -62,7 +62,7 @@ class CoreLoader {
   }
 
   private readonly libName: Record<string, string> = {
-    win32: 'MeoAssistant',
+    win32: 'MaaCore.dll',
     darwin: 'MeoAssistant.dylib',
     linux: 'libMeoAssistant.so'
   }
@@ -118,62 +118,6 @@ class CoreLoader {
   }
 
   /**
-   * 加载core
-   */
-  public load (): void {
-    if (CoreLoader.loadStatus) {
-      logger.silly('core already loaded, ignore..')
-      return
-    }
-    try {
-      this.dependences[process.platform].forEach((lib) => {
-        this.DepLibs.push(ffi.DynamicLibrary(path.join(this.libPath, lib)))
-      })
-      this.DLib = ffi.DynamicLibrary(path.join(this.libPath, this.libName[process.platform]), ffi.RTLD_NOW)
-      this.MeoAsstLib =
-      {
-        AsstLoadResource: ffi.ForeignFunction(this.DLib.get('AsstLoadResource'), BoolType,
-          [StringType], ffi.FFI_STDCALL),
-        AsstCreate: ffi.ForeignFunction(this.DLib.get('AsstCreate'), AsstPtrType, [], ffi.FFI_STDCALL),
-        AsstCreateEx: ffi.ForeignFunction(this.DLib.get('AsstCreateEx'), AsstPtrType,
-          ['pointer', CustomArgsType], ffi.FFI_STDCALL),
-        AsstDestroy: ffi.ForeignFunction(this.DLib.get('AsstDestroy'), voidType, [AsstPtrType], ffi.FFI_STDCALL),
-        AsstConnect: ffi.ForeignFunction(this.DLib.get('AsstConnect'),
-          BoolType,
-          [AsstPtrType, StringType, StringType, StringType],
-          ffi.FFI_STDCALL),
-
-        AsstAppendTask: ffi.ForeignFunction(this.DLib.get('AsstAppendTask'), IntType,
-          [AsstPtrType, StringType, StringType], ffi.FFI_STDCALL),
-        AsstSetTaskParams: ffi.ForeignFunction(this.DLib.get('AsstSetTaskParams'), BoolType,
-          [AsstPtrType, IntType, StringType], ffi.FFI_STDCALL),
-
-        AsstStart: ffi.ForeignFunction(this.DLib.get('AsstStart'), BoolType,
-          [AsstPtrType], ffi.FFI_STDCALL),
-        AsstStop: ffi.ForeignFunction(this.DLib.get('AsstStop'), BoolType,
-          [AsstPtrType], ffi.FFI_STDCALL),
-
-        AsstGetImage: ffi.ForeignFunction(this.DLib.get('AsstGetImage'), ULLType,
-          [AsstPtrType, Buff, ULLType], ffi.FFI_STDCALL),
-        AsstCtrlerClick: ffi.ForeignFunction(this.DLib.get('AsstCtrlerClick'), BoolType,
-          [AsstPtrType, IntType, IntType, BoolType], ffi.FFI_STDCALL),
-        AsstGetVersion: ffi.ForeignFunction(this.DLib.get('AsstGetVersion'), StringType,
-          [], ffi.FFI_STDCALL),
-        AsstLog: ffi.ForeignFunction(this.DLib.get('AsstLog'), voidType,
-          [StringType, StringType], ffi.FFI_STDCALL)
-      }
-      CoreLoader.loadStatus = true
-      const version = this.GetCoreVersion()
-      if (version) {
-        logger.info(`core loaded: version ${version}`)
-      }
-    } catch (error) {
-      // console.error()
-      logger.error((error as Error).message)
-    }
-  }
-
-  /**
    * @description 释放core
    */
   public dispose (): void {
@@ -189,8 +133,149 @@ class CoreLoader {
       console.log(dep.path())
       dep.close()
     }
-    this.DLib.close()
+    try {
+      this.DLib.close()
+    } catch (e) {
+      logger.error('close core error')
+    }
     CoreLoader.loadStatus = false
+  }
+
+  /**
+   * 加载core
+   */
+  public load (): void {
+    if (CoreLoader.loadStatus) {
+      logger.silly('core already loaded, ignore..')
+      return
+    }
+    try {
+      CoreLoader.loadStatus = true
+      this.dependences[process.platform].forEach((lib) => {
+        this.DepLibs.push(ffi.DynamicLibrary(path.join(this.libPath, lib)))
+      })
+      this.DLib = ffi.DynamicLibrary(path.join(this.libPath, this.libName[process.platform]), ffi.RTLD_NOW)
+      this.MeoAsstLib =
+        {
+          AsstSetUserDir: ffi.ForeignFunction(this.DLib.get('AsstSetUserDir'),
+            BoolType,
+            [StringType],
+            ffi.FFI_STDCALL),
+
+          AsstLoadResource: ffi.ForeignFunction(this.DLib.get('AsstLoadResource'),
+            BoolType,
+            [StringType],
+            ffi.FFI_STDCALL),
+
+          AsstSetStaticOption: ffi.ForeignFunction(this.DLib.get('AsstSetStaticOption'),
+            BoolType,
+            [IntType, StringType],
+            ffi.FFI_STDCALL),
+
+          AsstCreate: ffi.ForeignFunction(this.DLib.get('AsstCreate'),
+            AsstPtrType,
+            [],
+            ffi.FFI_STDCALL),
+
+          AsstCreateEx: ffi.ForeignFunction(this.DLib.get('AsstCreateEx'),
+            AsstPtrType,
+            ['pointer', CustomArgsType],
+            ffi.FFI_STDCALL),
+
+          AsstDestroy: ffi.ForeignFunction(this.DLib.get('AsstDestroy'),
+            VoidType,
+            [AsstPtrType],
+            ffi.FFI_STDCALL),
+
+          AsstSetInstanceOption: ffi.ForeignFunction(this.DLib.get('AsstSetInstanceOption'),
+            BoolType,
+            [AsstPtrType, IntType, StringType],
+            ffi.FFI_STDCALL),
+
+          AsstConnect: ffi.ForeignFunction(this.DLib.get('AsstConnect'),
+            BoolType,
+            [AsstPtrType, StringType, StringType, StringType],
+            ffi.FFI_STDCALL),
+
+          AsstAppendTask: ffi.ForeignFunction(this.DLib.get('AsstAppendTask'),
+            IntType,
+            [AsstPtrType, StringType, StringType],
+            ffi.FFI_STDCALL),
+
+          AsstSetTaskParams: ffi.ForeignFunction(this.DLib.get('AsstSetTaskParams'),
+            BoolType,
+            [AsstPtrType, IntType, StringType],
+            ffi.FFI_STDCALL),
+
+          AsstStart: ffi.ForeignFunction(this.DLib.get('AsstStart'),
+            BoolType,
+            [AsstPtrType],
+            ffi.FFI_STDCALL),
+
+          AsstStop: ffi.ForeignFunction(this.DLib.get('AsstStop'),
+            BoolType,
+            [AsstPtrType],
+            ffi.FFI_STDCALL),
+
+          AsstRunning: ffi.ForeignFunction(this.DLib.get('AsstRunning'),
+            BoolType,
+            [AsstPtrType],
+            ffi.FFI_STDCALL),
+
+          AsstAsyncConnect: ffi.ForeignFunction(this.DLib.get('AsstAsyncConnect'),
+            AsstAsyncCallIdType,
+            [AsstPtrType, StringType, StringType, StringType, BoolType],
+            ffi.FFI_STDCALL),
+
+          AsstAsyncClick: ffi.ForeignFunction(this.DLib.get('AsstAsyncClick'),
+            AsstAsyncCallIdType,
+            [AsstPtrType, IntType, IntType, BoolType],
+            ffi.FFI_STDCALL),
+
+          AsstAsyncScreencap: ffi.ForeignFunction(this.DLib.get('AsstAsyncScreencap'),
+            AsstAsyncCallIdType,
+            [AsstPtrType, BoolType],
+            ffi.FFI_STDCALL),
+
+          AsstGetImage: ffi.ForeignFunction(this.DLib.get('AsstGetImage'),
+            ULLType,
+            [AsstPtrType, Buff, ULLType],
+            ffi.FFI_STDCALL),
+
+          AsstGetUUID: ffi.ForeignFunction(this.DLib.get('AsstGetUUID'),
+            ULLType,
+            [AsstPtrType, StringType, ULLType],
+            ffi.FFI_STDCALL),
+
+          AsstGetTasksList: ffi.ForeignFunction(this.DLib.get('AsstGetTasksList'),
+            ULLType,
+            [AsstPtrType, IntPointerType, ULLType],
+            ffi.FFI_STDCALL),
+
+          AsstGetNullSize: ffi.ForeignFunction(this.DLib.get('AsstGetNullSize'),
+            ULLType,
+            [],
+            ffi.FFI_STDCALL),
+
+          AsstGetVersion: ffi.ForeignFunction(this.DLib.get('AsstGetVersion'),
+            StringType,
+            [],
+            ffi.FFI_STDCALL),
+
+          AsstLog: ffi.ForeignFunction(this.DLib.get('AsstLog'),
+            VoidType,
+            [StringType, StringType],
+            ffi.FFI_STDCALL)
+        }
+      const version = this.GetCoreVersion()
+      if (version) {
+        logger.info(`core loaded: version ${version}`)
+      }
+    } catch (error) {
+      // console.error()
+      logger.error((error as Error).message)
+      this.dispose()
+    }
   }
 
   /**
@@ -303,22 +388,17 @@ class CoreLoader {
    * @param uuid 设备唯一标识符
    * @param x x坐标
    * @param y y坐标
-   * @param block 是否阻塞，true会阻塞直到点击完成才返回，false异步返回
    * @returns
    */
-  public CtrlerClick (uuid: string, x: number, y: number, block: boolean): boolean {
-    return this.MeoAsstLib.AsstCtrlerClick(this.GetUUID(uuid), x, y, block)
+  public Click (uuid: string, x: number, y: number): boolean {
+    return this.MeoAsstLib.AsstClick(this.GetUUID(uuid), x, y)
   }
 
   public GetImage (uuid: string): string {
-    logger.silly('enter GetImage')
     const buf = Buffer.alloc(5114514)
-    logger.silly(`allocated size ${buf.length}`)
     const len = this.MeoAsstLib.AsstGetImage(this.GetUUID(uuid), buf as any, buf.length)
     const buf2 = buf.slice(0, len as number)
-    logger.silly('received image len: ', len)
     const v2 = buf2.toString('base64')
-    // logger.silly(v2)
     return v2
   }
 
